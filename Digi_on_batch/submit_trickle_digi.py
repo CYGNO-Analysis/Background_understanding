@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# USAGE: ./submit_trickle_digi.py -a 0.021 -l 1350 -o out_giulia_cu -i /cnaf/cygno-sim/Users/dimarcoe/digitune/digi_giulia_cu -s users/dimarcoe/digi/cu_giulia $PWD
+# USAGE: ./Digi_on_batch/submit_trickle_digi.py -o fe_35cm -i /cnaf/cygno-sim/Users/dimarcoe/digitune/digi_giulia_zcone/LIME_Fe55_source_2 -s users/dimarcoe/digi/digi_giulia_fe_zcone_zsteps/z35cm -c config/ConfigFile_new_35cm.txt -f digi_si1-2 -d $PWD
 
 import argparse
 import os
@@ -200,7 +200,7 @@ if __name__ == "__main__":
         "-W",
         "--wait-minutes",
         type=float,
-        default=30.0,
+        default=120.0,
         help="Tempo di attesa in minuti tra una sottomissione a blocchi e la successiva",
     )
 
