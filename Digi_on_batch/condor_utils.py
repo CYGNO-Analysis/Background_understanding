@@ -95,9 +95,9 @@ def main():
         "-a",
         "--action",
         type=str,
-        default="-f",
-        choices=["-f", "-r"],
-        help="Azione da applicare sul job (es. -f per force/remove, -r per release/hold)",
+        default="f",
+        choices=["f", "r", "-f", "-r"],
+        help="Azione da applicare sul job (es. 'f' per force/remove, 'r' per release/hold)",
     )
     parser.add_argument(
         "-N",
@@ -138,7 +138,10 @@ def main():
         print(f"  INIZIO CICLO {current_cycle}/{args.max_cycles}")
         print(f"=======================================================")
 
-        jobs_processed = run_cycle(ce_list, args.action, args.dry_run)
+        action_flag = (
+            args.action if args.action.startswith("-") else f"-{args.action}"
+        )
+        jobs_processed = run_cycle(ce_list, action_flag, args.dry_run)
         print(f"\n[Sommario Ciclo {current_cycle}] Processati {jobs_processed} job totali.")
 
         # Condizione di uscita 1: Raggiunto il limite massimo di cicli M
