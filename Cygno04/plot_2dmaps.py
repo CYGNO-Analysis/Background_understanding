@@ -21,9 +21,9 @@ def plot_2d_maps(
     zmin_occ=None, zmax_occ=None
 ):
     with uproot.open(input_root_file) as f:
-        occ2d_hist = f["occ2d"]
-        int2d_hist = f["int2d"]
-        prof2d_hist = f["prof2d"]
+        occ2d_hist = f["occ2d_images"]
+        int2d_hist = f["int2d_images"]
+        prof2d_hist = f["prof2d_images"]
 
         occ_vals, xedges, yedges = occ2d_hist.to_numpy()
         int_vals, _, _ = int2d_hist.to_numpy()
@@ -45,21 +45,21 @@ def plot_2d_maps(
     COLORMAP = "rainbow" 
 
     maps_to_plot = {
-        "occ2d": {
+        "occ2d_images": {
             "data": occ_masked,
             "title": "Pixel Occupancy Map",
             "zlabel": "Hits / Bin",
             "zmin": zmin_occ,
             "zmax": zmax_occ,
         },
-        "int2d": {
+        "int2d_images": {
             "data": int_masked,
             "title": "Integrated Charge Map",
             "zlabel": "Total Charge [ADC]",
             "zmin": zmin_int,
             "zmax": zmax_int,
         },
-        "prof2d": {
+        "prof2d_images": {
             "data": prof_masked,
             "title": "Mean Amplitude Profile 2D",
             "zlabel": "Mean Charge / Hit [ADC]",
@@ -105,13 +105,14 @@ def plot_2d_maps(
         ax.grid(True, linestyle="--", alpha=0.3, color="gray")
 
         # Salva in formato PDF rimuovendo tutto lo spazio bianco superfluo attorno
-        output_path = os.path.join(output_dir, f"{name}.pdf")
+        output_path = os.path.join(output_dir, name)
         
         # bbox_inches='tight' ELIMINA I MARGINI BIANCHI AI LATI E CENTRA IL PLOT NEL PDF
-        plt.savefig(output_path, format="pdf", bbox_inches='tight', pad_inches=0.1)
+        plt.savefig(f"{output_path}.pdf", format="pdf", bbox_inches='tight', pad_inches=0.1)
+        plt.savefig(f"{output_path}.png", format="png", bbox_inches='tight', pad_inches=0.1)
         plt.close(fig)
 
-        print(f"PDF salvato e centrato: {output_path}")
+        print(f"PDF/PNG saved in: {output_path}.pdf/png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot 2D delle mappe CYGNO saltando i bin vuoti.")
