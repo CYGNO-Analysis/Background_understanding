@@ -10,6 +10,7 @@ This is to make average 2D maps from several runs. This is done in the simplest 
 ### Dependencies:
 cygno lib (to read S3) and midas (to open raw files):
 `pip install git+https://github.com/CYGNUS-RD/cygno.git -U`
+
 `pip install 'https://github.com/CYGNUS-RD/middleware/blob/master/midas/midaslib.tar.gz?raw=true' `
 
 ### Usage:
