@@ -1,34 +1,38 @@
 import os
+import argparse
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-
+import ROOT
 import cygno as cy
-import swiftlib as sw
+
+
+def swift_download_midas_file(run, tmpdir, tag="LNGS"):
+    print("download or open midas file for run ", int(run))
+    mfile = cy.open_mid(int(run), path=tmpdir, cloud=True, tag=tag, verbose=True)
+    return mfile
+
 
 def create_2dmaps_from_midas(
     run_start,
     run_end,
-    output_pdf_dir="./plots_midas",
+    output_root_file="./midas_2dmaps.root",
     tag="LNGS",
     tmpdir="/tmp/",
     width=4096,
     height_single_cam=2304,
     num_cameras=3,
     cimax=65535,         # Threshold massimo per escludere saturazione/artefatti
-    pedestal_file=None   # Opzionale: array o percorso se si vuole sottrare il piedistallo
+    pedestal_file=None   # Opzionale: array o percorso se si vuole sottrarre il piedistallo
 ):
     total_height = height_single_cam * num_cameras
 
     # Accumulatori 2D (y, x) per l'intero detector
-    # Usiamo float64 per evitare qualsiasi problema di overflow sum
     charge_sum = np.zeros((total_height, width), dtype=np.float64)
     occupancy_sum = np.zeros((total_height, width), dtype=np.float64)
 
     for run_num in range(run_start, run_end + 1):
         print(f"\n---> Scaricamento/Apertura MIDAS per Run: {run_num:05d}")
         try:
-            mf = sw.swift_download_midas_file(run_num, tmpdir, tag)
+            mf = swift_download_midas_file(run_num, tmpdir, tag)
         except Exception as e:
             print(f"ERRORE nel recupero del file MIDAS per il run {run_num}: {e}")
             continue
@@ -42,10 +46,9 @@ def create_2dmaps_from_midas(
 
             keys = mevent.banks.keys()
             
-            # Scorriamo i banchi delle camere presente nell'evento MIDAS
+            # Scorriamo i banchi delle camere presenti nell'evento MIDAS
             for key in keys:
                 if key.startswith("CAM"):
-                    # Determiniamo l'indice della camera (es. 'CAM0' -> 0, 'CAM1' -> 1)
                     try:
                         cam_idx = int(key.replace("CAM", ""))
                     except ValueError:
@@ -75,80 +78,62 @@ def create_2dmaps_from_midas(
 
         print(f"Run {run_num} completato ({event_count} eventi elaborati).")
 
-    # Calcolo della mappa della MEDIA (Profile 2D = Charge / Occupancy)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        profile_mean = np.where(occupancy_sum > 0, charge_sum / occupancy_sum, np.nan)
-        charge_masked = np.where(occupancy_sum > 0, charge_sum, np.nan)
-        occ_masked = np.where(occupancy_sum > 0, occupancy_sum, np.nan)
-
     # ---------------------------------------------------------
-    # PLOTTING DEI PDF (Palette Rainbow + Centratura Perfetta)
+    # SALVATAGGIO MAPPE IN FILE ROOT (Compatibile con plotter)
     # ---------------------------------------------------------
-    os.makedirs(output_pdf_dir, exist_ok=True)
+    print("\nCreazione file ROOT di output e riempimento istogrammi 2D...")
+    
+    os.makedirs(os.path.dirname(os.path.abspath(output_root_file)), exist_ok=True)
+    tfout = ROOT.TFile(output_root_file, "recreate")
 
-    maps_to_plot = {
-        "occupancy_2d": {
-            "data": occ_masked,
-            "title": "Pixel Occupancy Map (MIDAS Raw)",
-            "zlabel": "Hits / Pixel",
-            "log": False,
-        },
-        "integrated_charge_2d": {
-            "data": charge_masked,
-            "title": "Integrated Charge Map (MIDAS Raw)",
-            "zlabel": "Total ADC",
-            "log": False,
-        },
-        "profile_mean_2d": {
-            "data": profile_mean,
-            "title": "Mean Amplitude Profile 2D (MIDAS Raw)",
-            "zlabel": "Mean ADC / Pixel",
-            "log": False,
-        },
-    }
+    # Inizializziamo gli stessi istogrammi usati dallo script dai cluster
+    prof2d = ROOT.TH2D("prof2d", "Mean Amplitude Profile 2D", 256, 0, width, 144 * num_cameras, 0, total_height)
+    int2d  = ROOT.TH2D("int2d", "Integrated Charge Map", 256, 0, width, 144 * num_cameras, 0, total_height)
+    occ2d  = ROOT.TH2D("occ2d", "Pixel Occupancy Map", 256, 0, width, 144 * num_cameras, 0, total_height)
 
-    x_edges = np.arange(0, width + 1)
-    y_edges = np.arange(0, total_height + 1)
+    # Estraiamo solo i punti dove l'occupancy è > 0 per salvataggio leggero e veloce
+    y_indices, x_indices = np.where(occupancy_sum > 0)
+    
+    # Inizializziamo i dati centro-bin dei pixel (aggiungiamo +0.5 per posizionare al centro del pixel)
+    x_coords = x_indices.astype(np.float64) + 0.5
+    y_coords = y_indices.astype(np.float64) + 0.5
+    
+    weights_occ = occupancy_sum[y_indices, x_indices].astype(np.float64)
+    weights_int = charge_sum[y_indices, x_indices].astype(np.float64)
 
-    for name, cfg in maps_to_plot.items():
-        # Figsize proporzionata alla geometria verticale (3 camere impilate)
-        fig, ax = plt.subplots(figsize=(7, 11))
+    # FillN C++ ultra-veloce su tutto l'array
+    n_points = len(x_coords)
+    if n_points > 0:
+        occ2d.FillN(n_points, x_coords, y_coords, weights_occ)
+        int2d.FillN(n_points, x_coords, y_coords, weights_int)
 
-        norm = LogNorm() if cfg["log"] else None
+    # Calcolo della media (Profile 2D = Integrated / Occupancy) direttamente in ROOT
+    prof2d.Divide(int2d, occ2d)
 
-        mesh = ax.pcolormesh(
-            x_edges,
-            y_edges,
-            cfg["data"],
-            shading="flat",
-            cmap="rainbow",  # Palette richiesta
-            norm=norm
-        )
+    # Scrittura ed eliminazione overhead
+    tfout.cd()
+    occ2d.Write()
+    int2d.Write()
+    prof2d.Write()
+    tfout.Close()
 
-        cbar = fig.colorbar(mesh, ax=ax, pad=0.03, fraction=0.046)
-        cbar.set_label(cfg["zlabel"], fontsize=12)
+    print(f"FILE ROOT Salvato con successo: {output_root_file}")
 
-        ax.set_title(cfg["title"], fontsize=14, fontweight="bold", pad=10)
-        ax.set_xlabel("X [pixel]", fontsize=12)
-        ax.set_ylabel("Y [pixel]", fontsize=12)
-
-        # Mantiene le proporzioni geometriche reali dei pixel
-        ax.set_aspect("equal")
-        ax.grid(True, linestyle="--", alpha=0.3, color="gray")
-
-        output_path = os.path.join(output_pdf_dir, f"{name}.pdf")
-
-        # bbox_inches='tight' rimuove completamente lo spazio bianco vuoto a sinistra
-        plt.savefig(output_path, format="pdf", bbox_inches="tight", pad_inches=0.1)
-        plt.close(fig)
-
-        print(f"PDF Salvato e centrato correttamente: {output_path}")
 
 if __name__ == "__main__":
-    # Esempio di utilizzo:
+    parser = argparse.ArgumentParser(description="Estrae mappe 2D da file MIDAS e le salva in un ROOT File")
+    parser.add_argument("--run-start", type=int, required=True, help="Numero di Run iniziale")
+    parser.add_argument("--run-end", type=int, required=True, help="Numero di Run finale")
+    parser.add_argument("--output", type=str, default="./midas_2dmaps.root", help="Path del file ROOT di output")
+    parser.add_argument("--tag", type=str, default="LNGS", help="Tag CYGNO per lo scaricamento cloud")
+    parser.add_argument("--tmpdir", type=str, default="/tmp/", help="Directory temporanea per file MIDAS")
+
+    args = parser.parse_args()
+
     create_2dmaps_from_midas(
-        run_start=124080,
-        run_end=124080,
-        output_pdf_dir="./plots_midas_pdf",
-        tag="LNGS"
+        run_start=args.run_start,
+        run_end=args.run_end,
+        output_root_file=args.output,
+        tag=args.tag,
+        tmpdir=args.tmpdir
     )

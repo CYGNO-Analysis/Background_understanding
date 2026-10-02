@@ -63,7 +63,7 @@ def make_2dmaps_s3_range(
 
     branches_to_read = [
         "redpix_ix", "redpix_iy", "redpix_iz", "nSc", "sc_redpixIdx",
-        "sc_integral", "sc_xmean", "sc_ymean", "sc_nhits", "sc_length", "sc_width"
+        "sc_integral", "sc_xmean", "sc_ymean", "sc_nhits", "sc_length", "sc_width", "cam"
     ]
 
     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
@@ -92,6 +92,7 @@ def make_2dmaps_s3_range(
 
                     for iev in range(num_events_chunk):
                         nSc = arrays["nSc"][iev]
+                        cam = arrays["cam"][iev]
                         if nSc == 0:
                             continue
 
@@ -101,7 +102,6 @@ def make_2dmaps_s3_range(
                             continue
 
                         evt_x_list, evt_y_list, evt_q_list = [], [], []
-                        cam = iev % 3
 
                         for isc in selected_iscs:
                             start, end = slices[isc]
