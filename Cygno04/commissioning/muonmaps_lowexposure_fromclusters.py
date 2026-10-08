@@ -2,6 +2,9 @@ import pandas as pd
 import argparse
 import subprocess
 import os
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 
 def find_consecutive_run_ranges(df):
     """
@@ -14,7 +17,6 @@ def find_consecutive_run_ranges(df):
     df = df.sort_values("run_number").reset_index(drop=True)
 
     ranges = []
-    
     current_start = df.loc[0, "run_number"]
     current_end = df.loc[0, "run_number"]
     current_vgem = df.loc[0, "GEM1_V"]
@@ -26,11 +28,9 @@ def find_consecutive_run_ranges(df):
         vgem = row["GEM1_V"]
         vdrift = row["DRIFT_V"]
 
-        # Se il run è consecutivo al precedente E ha le stesse tensioni, estendiamo il range
         if (run_num == current_end + 1) and (vgem == current_vgem) and (vdrift == current_vdrift):
             current_end = run_num
         else:
-            # Salva il range precedente e inizia uno nuovo
             ranges.append({
                 "run_min": int(current_start),
                 "run_max": int(current_end),
@@ -42,7 +42,6 @@ def find_consecutive_run_ranges(df):
             current_vgem = vgem
             current_vdrift = vdrift
 
-    # Aggiungi l'ultimo gruppo
     ranges.append({
         "run_min": int(current_start),
         "run_max": int(current_end),
@@ -53,16 +52,30 @@ def find_consecutive_run_ranges(df):
     return ranges
 
 
-def run_map_processing(csv_file, execute=False):
-    # 1. Lettura del CSV
+def execute_command(task):
+    """
+    Funzione worker eseguita in parallelo da ciascun processo CPU.
+    """
+    run_min, run_max, vgem, vdrift, cmd = task
+    cmd_str = " ".join(cmd)
+    print(f"\n[AVVIO CORE] Range {run_min}-{run_max} (VGEM={vgem}V, VD={vdrift}V)\nComando: {cmd_str}")
+
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"[COMPLETATO] Range {run_min}-{run_max}")
+        return True, run_min, run_max
+    except subprocess.CalledProcessError as e:
+        print(f"[ERRORE] Fallito range {run_min}-{run_max}: {e}")
+        return False, run_min, run_max
+
+
+def run_map_processing(csv_file, execute=False, n_jobs=1):
     print(f"--> Lettura file CSV: {csv_file}")
     df = pd.read_csv(csv_file)
 
-    # Clean delle stringhe per evitare problemi con spazi o maiuscole/minuscole
     df["run_description"] = df["run_description"].astype(str).str.strip()
     df["file_s3_tag"] = df["file_s3_tag"].astype(str).str.strip()
 
-    # 2. Filtraggio dei dati
     mask = (df["run_description"] == "MuonMap") & (df["file_s3_tag"] == "LNGS")
     df_filtered = df[mask].copy()
 
@@ -72,19 +85,17 @@ def run_map_processing(csv_file, execute=False):
         print("Nessun run trovato con i criteri specificati. Uscita.")
         return
 
-    # Converti colonne di interesse in numerico
     df_filtered["run_number"] = pd.to_numeric(df_filtered["run_number"], errors="coerce")
     df_filtered["GEM1_V"] = pd.to_numeric(df_filtered["GEM1_V"], errors="coerce")
     df_filtered["DRIFT_V"] = pd.to_numeric(df_filtered["DRIFT_V"], errors="coerce")
 
-    # 3. Identificazione dei Run Ranges
     run_ranges = find_consecutive_run_ranges(df_filtered)
 
     print(f"\n========================================================")
-    print(f"IDENTIFICATI {len(run_ranges)} RUN RANGES CONSECUTIVI:")
+    print(f"IDENTIFICATI {len(run_ranges)} RUN RANGES CONSECUTIVI")
     print(f"========================================================")
 
-    # 4. Generazione ed esecuzione dei comandi
+    tasks = []
     for r in run_ranges:
         run_min = r["run_min"]
         run_max = r["run_max"]
@@ -100,26 +111,34 @@ def run_map_processing(csv_file, execute=False):
             "--output", output_filename
         ]
 
-        cmd_str = " ".join(cmd)
-        print(f"\n[Range {run_min}-{run_max}] VGEM={vgem}V, Vdrift={vdrift}V")
-        print(f"  Comando: {cmd_str}")
+        tasks.append((run_min, run_max, vgem, vdrift, cmd))
+        print(f"  > Range {run_min}-{run_max} | VGEM={vgem}V, VD={vdrift}V -> {output_filename}")
 
-        if execute:
-            print(f"  --> Esecuzione in corso...")
-            try:
-                subprocess.run(cmd, check=True)
-                print("  --> Completato con successo!")
-            except subprocess.CalledProcessError as e:
-                print(f"  ERRORE durante l'esecuzione del comando: {e}")
-        else:
-            print("  (Modalità DRY-RUN: Usa --execute per lanciare effettivamente i comandi)")
+    if not execute:
+        print("\n(Modalità DRY-RUN: Usa --execute per lanciare i comandi)")
+        return
+
+    # Determinazione dei thread/processi da usare
+    max_cores = multiprocessing.cpu_count()
+    if n_jobs <= 0 or n_jobs > max_cores:
+        n_jobs = max_cores
+
+    actual_workers = min(n_jobs, len(tasks))
+    print(f"\n---> ESECUZIONE PARALLELA SU {actual_workers} CORE CPU (disponibili: {max_cores})...\n")
+
+    # Esecuzione in parallelo con ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=actual_workers) as executor:
+        futures = [executor.submit(execute_command, task) for task in tasks]
+        for future in as_completed(futures):
+            success, rmin, rmax = future.result()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Processa file CSV per identificare range di run di MuonMap e genera mappe.")
-    parser.add_argument("--csv", type=str, required=True, help="Path del file CSV di input (logbook)")
-    parser.add_argument("--execute", action="store_true", help="Esegue effettivamente i comandi (default: solo dry-run)")
+    parser = argparse.ArgumentParser(description="Processa file CSV e lancia in parallelo sui core CPU la creazione delle mappe.")
+    parser.add_argument("--csv", type=str, required=True, help="Path del file CSV di input")
+    parser.add_argument("--execute", action="store_true", help="Esegue effettivamente i comandi")
+    parser.add_argument("-j", "--jobs", type=int, default=1, help="Numero di job/processi paralleli (es. 4, o -1 per usare tutti i core dell'M4)")
 
     args = parser.parse_args()
 
-    run_map_processing(csv_file=args.csv, execute=args.execute)
+    run_map_processing(csv_file=args.csv, execute=args.execute, n_jobs=args.jobs)
