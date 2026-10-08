@@ -43,8 +43,8 @@ def get_or_create_pedestal(
     total_height = height_single_cam * num_cameras
 
     # Accumulatori PyTorch su GPU Metal
-    sum_img = torch.zeros((total_height, width), dtype=torch.float64, device=device)
-    sum_sq_img = torch.zeros((total_height, width), dtype=torch.float64, device=device)
+    sum_img = torch.zeros((total_height, width), dtype=torch.float32, device=device)
+    sum_sq_img = torch.zeros((total_height, width), dtype=torch.float32, device=device)
     counts = torch.zeros((total_height, width), dtype=torch.int64, device=device)
 
     mf = swift_download_midas_file(pedrun, tmpdir, tag)
@@ -66,7 +66,7 @@ def get_or_create_pedestal(
                     continue
 
                 img_arr, _, _ = cy.daq_cam2array(mevent.banks[key])
-                img_t = torch.from_numpy(img_arr).to(device=device, dtype=torch.float64)
+                img_t = torch.from_numpy(img_arr).to(device=device, dtype=torch.float32)
 
                 y_start = cam_idx * height_single_cam
                 y_end = y_start + height_single_cam
