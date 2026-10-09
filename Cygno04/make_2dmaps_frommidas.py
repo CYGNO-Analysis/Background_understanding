@@ -42,7 +42,6 @@ def get_or_create_pedestal(
     print(f"\n[PEDESTAL] Calcolo piedistallo dal Run {pedrun:05d} (GPU M4)...")
     total_height = height_single_cam * num_cameras
 
-    # Accumulatori PyTorch su GPU Metal
     sum_img = torch.zeros((total_height, width), dtype=torch.float32, device=device)
     sum_sq_img = torch.zeros((total_height, width), dtype=torch.float32, device=device)
     counts = torch.zeros((total_height, width), dtype=torch.int64, device=device)
@@ -84,7 +83,6 @@ def get_or_create_pedestal(
     variance = (sum_sq_img / counts) - (ped_mean**2)
     ped_std = torch.sqrt(torch.clamp(variance, min=0.0))
 
-    # Convertiamo in CPU / NumPy per salvataggio npz
     ped_mean_np = ped_mean.cpu().numpy().astype(np.float32)
     ped_std_np = ped_std.cpu().numpy().astype(np.float32)
     np.savez_compressed(ped_cache_file, ped_mean=ped_mean_np, ped_std=ped_std_np)
@@ -99,6 +97,7 @@ def create_2dmaps_from_midas(
     output_root_file="./midas_2dmaps_pedsub.root",
     tag="LNGS",
     tmpdir="/tmp/",
+    veto_events_dir="./veto_events",
     width=4096,
     height_single_cam=2304,
     num_cameras=3,
@@ -108,7 +107,6 @@ def create_2dmaps_from_midas(
     device = get_device()
     total_height = height_single_cam * num_cameras
 
-    # 1. Caricamento Mappe Piedistallo direttamente in memoria GPU MPS
     ped_mean, ped_std = get_or_create_pedestal(
         pedrun=pedrun,
         device=device,
@@ -119,16 +117,22 @@ def create_2dmaps_from_midas(
         num_cameras=num_cameras
     )
 
-    # Accumulatori GPU
     charge_sum = torch.zeros((total_height, width), dtype=torch.float32, device=device)
     occupancy_sum = torch.zeros((total_height, width), dtype=torch.float32, device=device)
 
-    # Pre-calcolo soglia nsigma * std in GPU
     nsigma_std = nsigma * ped_std
 
-    # 2. Elaborazione dei Run
     for run_num in range(run_start, run_end + 1):
         print(f"\n---> Elaborazione Run Segnale: {run_num:05d}")
+
+        # Controllo se esiste un file di Veto Eventi per questo specifico run
+        veto_set = set()
+        veto_file = os.path.join(veto_events_dir, f"spike_events_run{run_num:05d}.npz")
+        if os.path.exists(veto_file):
+            veto_data = np.load(veto_file)
+            veto_set = set(veto_data["veto_events"])
+            print(f"  [VETO ATTIVO] Caricati {len(veto_set)} eventi da scartare da: {veto_file}")
+
         try:
             mf = swift_download_midas_file(run_num, tmpdir, tag)
         except Exception as e:
@@ -136,10 +140,17 @@ def create_2dmaps_from_midas(
             continue
 
         event_count = 0
+        skipped_count = 0
         mf.jump_to_start()
 
         for mevent in mf:
             if mevent.header.is_midas_internal_event():
+                continue
+
+            # CONTROLLO VETO EVENTO SPIKE
+            if event_count in veto_set:
+                skipped_count += 1
+                event_count += 1
                 continue
 
             for key in mevent.banks.keys():
@@ -157,19 +168,16 @@ def create_2dmaps_from_midas(
                     y_start = cam_idx * height_single_cam
                     y_end = y_start + height_single_cam
 
-                    # Spostamento immediato della matrice 2D nella memoria unificata GPU Apple
                     img_t = torch.from_numpy(img_arr).to(device=device, dtype=torch.float32)
 
                     ped_mean_cam = ped_mean[y_start:y_end, :]
                     nsigma_std_cam = nsigma_std[y_start:y_end, :]
 
-                    # Operazioni vettoriali parallele sui core GPU
                     img_sub = img_t - ped_mean_cam
                     valid_mask = (img_sub > nsigma_std_cam) & (img_t < cimax)
 
                     img_clean = torch.where(valid_mask, img_sub, 0.0)
 
-                    # Accumulo su memoria Metal
                     charge_sum[y_start:y_end, :] += img_clean
                     occupancy_sum[y_start:y_end, :] += valid_mask.to(torch.float32)
 
@@ -177,11 +185,12 @@ def create_2dmaps_from_midas(
             if event_count % 10 == 0:
                 print(f"  > Processati {event_count} eventi MIDAS su GPU M4...")
 
-    # Trasferimento finale dei risultati da GPU MPS a CPU per salvare il ROOT file
+        print(f"Run {run_num} completato: {event_count} eventi totali, {skipped_count} eventi scartati dal veto.")
+
     charge_sum_np = charge_sum.cpu().numpy()
     occupancy_sum_np = occupancy_sum.cpu().numpy()
 
-    # 3. Salvataggio ROOT
+    # Salvataggio ROOT
     print("\nSalvataggio del file ROOT di output...")
     os.makedirs(os.path.dirname(os.path.abspath(output_root_file)), exist_ok=True)
     tfout = ROOT.TFile(output_root_file, "recreate")
@@ -214,7 +223,7 @@ def create_2dmaps_from_midas(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mappe 2D MIDAS con accelerazione GPU M4 PyTorch/Metal")
+    parser = argparse.ArgumentParser(description="Mappe 2D MIDAS con accelerazione GPU M4 PyTorch/Metal e Veto Spikes")
     parser.add_argument("--run-start", type=int, required=True)
     parser.add_argument("--run-end", type=int, required=True)
     parser.add_argument("--pedrun", type=int, required=True)
@@ -222,6 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("--nsigma", type=float, default=3.0)
     parser.add_argument("--tag", type=str, default="LNGS")
     parser.add_argument("--tmpdir", type=str, default="/tmp/")
+    parser.add_argument("--veto-events-dir", type=str, default="./veto_events", help="Directory contenente i file .npz degli eventi spike da scartare")
 
     args = parser.parse_args()
 
@@ -232,5 +242,6 @@ if __name__ == "__main__":
         output_root_file=args.output,
         nsigma=args.nsigma,
         tag=args.tag,
-        tmpdir=args.tmpdir
+        tmpdir=args.tmpdir,
+        veto_events_dir=args.veto_events_dir
     )
