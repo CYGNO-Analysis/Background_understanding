@@ -73,7 +73,9 @@ def make_2dmaps_s3_range(
     occ2d  = ROOT.TH2D("occ2d", "Occupancy 2D", 256, 0, width, 144 * 3, 0, total_height)
 
     for run_num in range(run_start, run_end + 1):
-        s3_url = f"{base_url}/reco_run{run_num:05d}_3D.root"
+        # s3_url = f"{base_url}/reco_run{run_num:05d}_3D.root"
+        # special reco w/o vignetting
+        s3_url = f"{base_url}/reco_run{run_num:05d}_novign.root"
         print(f"\n---> Apertura file remoto S3: {s3_url}")
 
         try:

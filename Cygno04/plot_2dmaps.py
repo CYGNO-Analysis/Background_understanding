@@ -10,11 +10,16 @@ def plot_2d_maps(
     output_dir="./plots",
     output_name=None,
     use_log=False,
-    zmin_prof=None, zmax_prof=None
+    zmin_prof=None, zmax_prof=None,
+    origin='images'
 ):
     with uproot.open(input_root_file) as f:
-        occ2d_hist = f["occ2d_images"]
-        prof2d_hist = f["prof2d_images"]
+        if origin=='images':
+            occ2d_hist = f["occ2d_images"]
+            prof2d_hist = f["prof2d_images"]
+        else:
+            occ2d_hist = f["occ2d"]
+            prof2d_hist = f["prof2d"]            
 
         occ_vals, xedges, yedges = occ2d_hist.to_numpy()
         prof_vals, _, _ = prof2d_hist.to_numpy()
@@ -80,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="./plots", help="Directory di output per le immagini")
     parser.add_argument("--output-name", type=str, default=None, help="Nome identificativo per l'output (es. 'run20000' genera 'prof2d_run20000.pdf/png')")
     parser.add_argument("--log", action="store_true", help="Usa scala logaritmica per l'asse Z")
+    parser.add_argument("--from-reco", action="store_true", help="Usa l'output delle mappe fatte dai redpix dei cluster RECO")
 
     # Range asse Z per il Profilo 2D
     parser.add_argument("--zmin-prof", type=float, default=None, help="Z min per Profilo 2D")
@@ -87,11 +93,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    origin = 'reco' if args.from_reco else 'images'
+    
     plot_2d_maps(
         input_root_file=args.input,
         output_dir=args.output_dir,
         output_name=args.output_name,
         use_log=args.log,
         zmin_prof=args.zmin_prof,
-        zmax_prof=args.zmax_prof
+        zmax_prof=args.zmax_prof,
+        origin=origin
     )
